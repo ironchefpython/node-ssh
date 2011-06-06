@@ -1,0 +1,530 @@
+/**
+ * @package node-ssh
+ * @copyright  Copyright(c) 2011 Ajax.org B.V. <info AT ajax.org>
+ * @author Gabor Krizsanits <gabor AT ajax DOT org>
+ * @license http://github.com/ajaxorg/node-ssh/blob/master/LICENSE MIT License
+ */
+
+var sftp = require('./build/default/sftp');
+//var constants = sftp.constants;
+var fs = require("fs");
+var path = require('path');
+var constants = process.binding('constants');
+
+  /**
+   * blah
+   * 
+   * @param {String}       path
+   * @param {Function}     cb
+   * @type  {void}
+   */
+
+var tmpDir = (function() {
+    var value,
+        def     = "/tmp",
+        envVars = ["TMPDIR", "TMP", "TEMP"],
+        i       = 0,
+        l       = envVars.length;
+    for(; i < l; ++i) {
+        value = process.env[envVars[i]];
+        if (value)
+            return fs.realpathSync(value).replace(/\/+$/, "");
+    }
+    return fs.realpathSync(def).replace(/\/+$/, "");
+})();
+
+var uuid = function(len, radix) {
+   var i,
+       chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split(""),
+       uuid  = [],
+       rnd   = Math.random;
+   radix     = radix || chars.length;
+
+   if (len) {
+       // Compact form
+       for (i = 0; i < len; i++)
+           uuid[i] = chars[0 | rnd() * radix];
+   }
+   else {
+       // rfc4122, version 4 form
+       var r;
+       // rfc4122 requires these characters
+       uuid[8] = uuid[13] = uuid[18] = uuid[23] = "-";
+       uuid[14] = "4";
+
+       // Fill in random data.  At i==19 set the high bits of clock sequence as
+       // per rfc4122, sec. 4.1.5
+       for (i = 0; i < 36; i++) {
+           if (!uuid[i]) {
+               r = 0 | rnd() * 16;
+               uuid[i] = chars[(i == 19) ? (r & 0x3) | 0x8 : r & 0xf];
+           }
+       }
+   }
+
+   return uuid.join("");
+};
+
+sftp.Stats.prototype._checkModeProperty = function(property) {
+  return ((this.mode & constants.S_IFMT) === property);
+};
+
+sftp.Stats.prototype.isDirectory = function() {
+  return this._checkModeProperty(constants.S_IFDIR);
+};
+
+sftp.Stats.prototype.isFile = function() {
+  return this._checkModeProperty(constants.S_IFREG);
+};
+
+sftp.Stats.prototype.isBlockDevice = function() {
+  return this._checkModeProperty(constants.S_IFBLK);
+};
+
+sftp.Stats.prototype.isCharacterDevice = function() {
+  return this._checkModeProperty(constants.S_IFCHR);
+};
+
+sftp.Stats.prototype.isSymbolicLink = function() {
+  return this._checkModeProperty(constants.S_IFLNK);
+};
+
+sftp.Stats.prototype.isFIFO = function() {
+  return this._checkModeProperty(constants.S_IFIFO);
+};
+
+sftp.Stats.prototype.isSocket = function() {
+  return this._checkModeProperty(constants.S_IFSOCK);
+};
+
+var SFTP = module.exports = function () {
+  this._session = new sftp.SFTP();
+  this._tasks = [];
+  this._subTasks = [];
+  this._callback = false;
+  this.timeout = 0;
+  this.options = {};
+  this._stats = {};
+  this.setupEvent();
+};
+
+(function(){
+  this.setupEvent = function() {
+    var _self = this;
+    this._session.on('callback',function(error,result,more){
+      //console.error("CALLBACK");
+      if (_self.timeout) {
+        clearTimeout(_self.timeout);
+        _self.timeout = 0;
+      }
+      var cb = _self._tasks[0].cb;
+      _self._tasks.shift();
+      if (cb && typeof cb == "function"){
+        _self._subTasks = [];
+        _self._callback = true;
+        cb(error,result,more);
+        _self._callback = false;
+        if (_self._subTasks.length){
+          _self._tasks = _self._subTasks.concat(_self._tasks);        
+        }  
+      }  
+      _self._executeNext();
+    });    
+  };
+  
+  this._addCommand = function(cmd, args, cb) {
+    var task = {
+        cmd:cmd, 
+        args:args, 
+        cb:cb
+      };
+    
+    if (this._callback) {
+      //console.error("cb: ", cmd);
+      this._subTasks.push(task);
+    }
+    else {
+      //console.error("norm: ", cmd);
+      this._tasks.push(task);
+      if (this._tasks.length == 1)
+        this._executeNext();
+    }
+  };
+  
+  this._executeNext = function() {
+    var self = this;
+    if (this._tasks.length>0) {
+//      console.error('execute: ', this._tasks[0].cmd);
+      if (this.timeout) {
+        clearTimeout(this.timeout);
+      }
+      this.timeout = setTimeout(function(){
+        clearTimeout(this.timeout);
+        self.timeout = 0;        
+        console.error("error: sftp timeout");
+        self._session.removeAllListeners("callback");
+        self._session.interrupt();
+        if (self._reconnect) {
+          self._reconnect = false;
+          return self._lastCb("Error: SFTP: Connection lost, reconnect timed out.");
+        }
+        self._session = new sftp.SFTP();
+        var oldTasks = self._tasks;
+        self._lastCb = self._tasks[0].cb;
+        self._tasks = [];
+        self.setupEvent();
+        self._reconnect = true;
+        self.init(self.options, function(err){
+            console.error("sftp reinit");
+            if (err)
+              return self._lastCb(
+                "Error: SFTP: Connection lost reconnect init error: " + err);
+            
+            self.connect(function(err){
+              console.error("reconnect");
+              return self._lastCb(
+                "Error: SFTP: Connection lost reconnect error: " + err);
+                
+              self._reconnect = false;
+              self._tasks = oldTasks;
+            });  
+        });
+      }, 15000);
+      if (this._tasks[0].cmd.indexOf("_") === 0)
+        this[this._tasks[0].cmd].apply(this, this._tasks[0].args);
+      else  {
+        this._session[this._tasks[0].cmd].apply(this._session, this._tasks[0].args);      
+      }
+    }
+    else 
+    {
+      // no commands left, let's send out a command after a while for
+      // stay alive
+      this.timeout = setInterval(function(){
+        self.stat("");},100000);
+    }
+  };
+  
+  this.init = function(options, cb) {        
+    if (!options || 
+        !options.host || 
+        !options.user ||
+        !options.port)
+          throw new Error('Invalid argument.');
+    if (!cb)
+      cb = function(){};
+    var self = this;  
+    this._session.init(options);
+    this.options = options;
+    if (options.pubKey && options.prvKey) {      
+      this.setPubKey(options.pubKey, function(error){
+        if (error)
+          return cb(error);
+        self.setPrvKey(options.prvKey, function(error){
+            self._inited = true;
+            cb(error);
+        });  
+      }); 
+    }
+    else
+     self._inited = true;
+  };
+
+  this.setPubKey = function(pub, cb) {
+    var _self = this;
+    if (!cb)
+      cb = function(){};
+    this._addCommand("_writeTmpFile", [pub], function(error, tmp) {
+      if (error)
+        return cb(error);
+      _self._addCommand("setPubKey", [tmp], function(error) {
+        fs.unlink(tmp);
+        cb(error);
+      });
+    });  
+  };
+  
+  this.setPrvKey = function(prv, cb) {
+    var _self = this;
+    if (!cb)
+      cb = function(){};
+    this._addCommand("_writeTmpFile", [prv], function(error, tmp) {
+      if (error)
+        return cb(error);
+      _self._addCommand("setPrvKey", [tmp], function(error) {
+        fs.unlink(tmp);
+        cb(error);
+      });
+    });      
+  };
+  
+  this.connect = function(cb) {
+    this._addCommand("connect", [], cb);
+  };
+
+  this.isConnected = function() {
+    return this._session.isConnected();
+  };
+  
+  /**
+   * Async mkdir, the callback gets the error message on failure.
+   * 
+   * @param {String}        path
+   * @param {String,octal}  mode
+   * @param {Function}      cb
+   * @type  {void}
+   */     
+  this.mkdir = function(path, mode, cb) {
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');
+    if (typeof mode === "string")
+      mode = parseInt(mode,10);
+    if (typeof mode !== "number")
+      throw new Error('Invalid argument.');
+      
+    this._addCommand("mkdir", [path, mode], cb);
+  };
+
+  /**
+   * Asynchronously writes data to a file. data can be a string or a buffer.
+   * Example:
+   * <pre class="code">
+   * sftp.writeFile("message.txt", "Hello Node", function(err) {
+   *     if (err)
+   *         throw err;
+   *     console.log("It's saved!");
+   * });
+   * </pre>
+   * 
+   * @param {String}        filename
+   * @param {String,Buffer} data
+   * @param {String}        encoding
+   * @param {Function}      callback
+   * @type  {void}
+   */
+  this.writeFile = function(path, data, type, cb) {
+    if (typeof data === 'string') {
+      data = new Buffer(data);
+      //console.log(data);
+    }
+    if (typeof type === 'function')
+      cb = type;
+      
+    if (typeof path !== "string" || typeof data !== "object")
+      throw new Error('Invalid argument.');
+
+    this._addCommand("writeFile", [path, data], cb);
+  };
+
+  /**
+   * Asynchronously reads the entire contents of a file.
+   * The callback is passed two arguments (err, data), where data is the contents 
+   * of the file.
+   * If no encoding is specified, then the raw buffer is returned.
+   * Example:
+   * <pre class="code">
+   * sftp.readFile("/etc/passwd", function(err, data) {
+   *     if (err)
+   *         throw err;
+   *     console.log(data);
+   * });
+   * </pre>
+   * 
+   * @param {String}   filename
+   * @param {String}   encoding
+   * @param {Function} callback
+   * @type  {void}
+   */
+  this.readFile = function(path, type, cb) {
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');    
+    if (typeof type === 'function')
+      cb = type;
+      
+    var _self = this;
+    this._addCommand("_openTmpFile", [], function(error, tmp) {
+      if (error)
+        return cb(error);
+      _self._addCommand("readFile", [tmp.fd, path], function(error) {
+        if (error)
+          return cb(error);
+        fs.closeSync(tmp.fd);
+        _self._addCommand("_readTmpFile", [tmp.path], function(error, data){
+            if (error == null)
+              error = "";
+            fs.unlink(tmp.path);  
+            return cb(error, data);  
+          });
+      });      
+    });    
+  };
+
+  /**
+   * Async list a directory, the callback gets two arguments, the error message 
+   * on failure and the array of names of the children. '.' and '..' are exluded.
+   * 
+   * @param {String}       path
+   * @param {Function}     cb
+   * @type  {void}
+   */  
+  this.readdir = function(path,cb) {
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');    
+    var self = this;
+    this._addCommand("listDir", [path], function(err, entries, stats) {
+      for (var i=0, l=entries.length; i<l; i++) {
+        self._stats[path + '/' + entries[i]] = stats[i];
+        //console.error("stat: ", i, stats[i], stats[i].isDirectory());
+      }
+      cb(err, entries);
+    });
+  };
+  
+  this._openTmpFile = function() {
+    var tmpFile = tmpDir + "/" + uuid();
+    var _self = this;
+    fs.open(tmpFile, "w+", function(error, fd) {      
+      _self._session.emit("callback", error, {fd:fd, path:tmpFile});
+    });
+  };
+
+  this._writeTmpFile = function(data) {
+    var tmpFile = tmpDir + "/" + uuid();
+    var _self = this;
+    fs.writeFile(tmpFile, data, function(error) {      
+      _self._session.emit("callback", error, tmpFile);
+    });
+  };
+
+  this._readTmpFile = function(path) {
+    var _self = this;
+    fs.readFile(path, function(error, data) {
+      _self._session.emit("callback", error, data);
+      fs.unlink(path);
+    });
+  };
+
+  /**
+   * Async rename, the callback gets the error message on failure.
+   * 
+   * @param {String}       path
+   * @param {String}       to
+   * @param {Function}     cb
+   * @type  {void}
+   */  
+  this.rename = function(path, to, cb) {
+    if (typeof path !== "string" || typeof to !== "string")
+      throw new Error('Invalid argument.');    
+    this._addCommand("rename", [path, to], cb);
+  };
+  
+  /**
+   * Async chomd, the callback gets the error message on failure.
+   * 
+   * @param {String}              path
+   * @param {String, octal}       mode
+   * @param {Function}            cb
+   * @type  {void}
+   */   
+  this.chmod = function(path, mode, cb) {
+    if (typeof mode === "string")
+      mode = parseInt(mode,10);
+    if (typeof path !== "string" || typeof mode !== "number")
+      throw new Error('Invalid argument.');
+    this._addCommand("chmod", [path, mode], cb);
+  };
+
+  /**
+   * Async chown, the callback gets the error message on failure.
+   * 
+   * @param {String}          path
+   * @param {String, number}  uid
+   * @param {String, octal}   gid
+   * @param {Function}        cb
+   * @type  {void}
+   */    
+  this.chown = function(path, uid, gid, cb) {
+    if (typeof uid === "string")
+      uid = parseInt(mode,10);
+    if (typeof gid === "string")
+      gid = parseInt(mode,10);
+    if (typeof path !== "string" || 
+      typeof uid !== "number" ||
+      typeof gid !== "number")
+        throw new Error('Invalid argument.');
+    this._addCommand("chown", [path, uid, gid], cb);
+  };
+  
+  /**
+   * Async stat, the callback gets two arguments, the error string and a stat
+   * object. On error the stat object is undefined.
+   * 
+   * @param {String}       path
+   * @param {Function}     cb
+   * @type  {void}
+   */    
+  this.stat = function(path, cb) {
+//    console.error("stat ", path);
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');
+    if (path && this._stats[path])
+      cb("", this._stats[path]);
+    else
+      this._addCommand("stat", [path], cb);  
+  };
+/*  
+  this.lstat = function(path, cb) {
+    this._addCommand("lstat", [path], cb);
+  };
+  
+  this.sftptat = function(fd, cb) {
+    this._addCommand("sftptat", [path], cb);
+  };
+*/  
+  /**
+   * Async delete file, the callback gets the error message on failure.
+   * 
+   * @param {String}       path
+   * @param {Function}     cb
+   * @type  {void}
+   */  
+  this.unlink = function(path, cb) {
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');
+    this._addCommand("unlink", [path], cb);  
+  };
+  
+  /**
+   * Asynch remove directory. Directory must be empty. The callback gets the
+   * error message on failure.
+   * 
+   * @param {String}       path
+   * @param {Function}     cb
+   * @type  {void}
+   */  
+  this.rmdir = function(path, cb) {
+    if (typeof path !== "string")
+      throw new Error('Invalid argument.');
+    this._addCommand("rmdir", [path], cb);
+  };
+  
+  /**
+   * Executes a shell command on the server. The callback has two arguments,
+   * the error if the command could not be executed, and the output of the 
+   * command.
+   * 
+   * @param {String}       command
+   * @param {Function}     cb
+   * @type  {void}
+   */  
+  this.exec = function(command, cb) {
+    if (typeof command !== "string")
+      throw new Error('Invalid argument.');
+    this._addCommand("exec", [command], function(error, data){
+      if (cb)
+        cb(error, data ? data.join("") : data);
+    });    
+  };
+  
+}).call(SFTP.prototype);
+
