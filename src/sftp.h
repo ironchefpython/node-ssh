@@ -31,6 +31,7 @@ private:
     sftp_file m_sftp_file;
     ssh_string m_pub_key;
     ssh_private_key m_prv_key;    
+    long m_timeout;
     int m_done;
     char* m_error;
     ListNode* m_list;

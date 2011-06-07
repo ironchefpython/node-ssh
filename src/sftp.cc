@@ -141,13 +141,13 @@ int SFTP::startConnect(eio_req *req)
   }
   int res = ssh_connect(pthis->m_ssh_session);
   if (res != SSH_OK) {
-    fprintf(stderr, "connection failed\n");
+    //fprintf(stderr, "connection failed\n");
     snprintf(pthis->m_error, SFTP_MAX_ERROR, 
             "Error connecting: %s\n",
             ssh_get_error(pthis->m_ssh_session));
     return 0;
   }
-  fprintf(stderr, "after connection\n");
+  //fprintf(stderr, "after connection\n");
   // TODO: ssh_is_server_known() and warn the user if not...
   
   //res = ssh_userauth_password(pthis->m_ssh_session, NULL, *password);
@@ -551,7 +551,7 @@ int SFTP::onStat(eio_req *req)
   Handle<Value> argv[2];
   //fprintf(stderr, pthis->m_error);
   argv[0] = String::New(pthis->m_error);  
-  fprintf(stderr, "mstat: %p\n", pthis->m_stat);
+  //fprintf(stderr, "mstat: %p\n", pthis->m_stat);
   if (pthis->m_stat) {
     argv[1] = BuildStatsObject(pthis->m_stat);
   }
@@ -669,6 +669,8 @@ inline void setOption(ssh_session& session, Local<Object>& obj,
   }
 }
 
+
+
 Handle<Value> SFTP::init(const Arguments &args) 
 {  
   HandleScope scope;
@@ -680,11 +682,12 @@ Handle<Value> SFTP::init(const Arguments &args)
     return False();
   
   Local<Object> opt = Local<Object>::Cast(args[0]);    
+  // TODO: free these!!!
   setOption(pthis->m_ssh_session, opt, "host", SSH_OPTIONS_HOST);
   setOption(pthis->m_ssh_session, opt, "port", SSH_OPTIONS_PORT_STR);
   setOption(pthis->m_ssh_session, opt, "user", SSH_OPTIONS_USER);
-  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) new long(1));
-  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_LOG_VERBOSITY, (void*) new int(SSH_LOG_PACKET));
+  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) new long(10));
+  //ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_LOG_VERBOSITY, (void*) new int(SSH_LOG_PACKET));
   return True();  
 }
 
@@ -852,14 +855,14 @@ Handle<Value>SFTP::isConnected(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   int ret = ssh_is_connected(pthis->m_ssh_session);
-  fprintf(stdout, "isconnected: %d\n", ret);
+  //fprintf(stdout, "isconnected: %d\n", ret);
   return ret == 1 ? True() : False();
 }
 
 Handle<Value>SFTP::interrupt(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
-  fprintf(stderr, "interrupt\n");
+  //fprintf(stderr, "interrupt\n");
   //ssh_disconnect(pthis->m_ssh_session);
   //ssh_silent_disconnect(pthis->m_ssh_session);
   ssh_set_fd_except(pthis->m_ssh_session);
