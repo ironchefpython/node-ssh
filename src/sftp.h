@@ -1,3 +1,10 @@
+/**
+ * @package node-ssh
+ * @copyright  Copyright(c) 2011 Ajax.org B.V. <info AT ajax.org>
+ * @author Gabor Krizsanits <gabor AT ajax DOT org>
+ * @license http://github.com/ajaxorg/node-ssh/blob/master/LICENSE MIT License
+ */
+
 #ifndef NODE_SFTP_SFTP_H
 #define NODE_SFTP_SFTP_H
 
@@ -30,8 +37,7 @@ private:
     sftp_session m_sftp_session;
     sftp_file m_sftp_file;
     ssh_string m_pub_key;
-    ssh_private_key m_prv_key;    
-    long m_timeout;
+    ssh_private_key m_prv_key;
     int m_done;
     char* m_error;
     ListNode* m_list;

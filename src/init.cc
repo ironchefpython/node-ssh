@@ -1,9 +1,18 @@
+/**
+ * @package node-ssh
+ * @copyright  Copyright(c) 2011 Ajax.org B.V. <info AT ajax.org>
+ * @author Gabor Krizsanits <gabor AT ajax DOT org>
+ * @license http://github.com/ajaxorg/node-ssh/blob/master/LICENSE MIT License
+ */
+
 #include "sftp.h"
 #include <libssh/callbacks.h>
 
 #include <errno.h>
 #include <stdlib.h>
 #include <pthread.h>
+
+// Thread callbacks are based on the libssh pthreads.c file
 
 extern "C" {
 static int ssh_pthread_mutex_init (void **priv)

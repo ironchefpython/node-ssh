@@ -1,3 +1,10 @@
+/**
+ * @package node-ssh
+ * @copyright  Copyright(c) 2011 Ajax.org B.V. <info AT ajax.org>
+ * @author Gabor Krizsanits <gabor AT ajax DOT org>
+ * @license http://github.com/ajaxorg/node-ssh/blob/master/LICENSE MIT License
+ */
+ 
 #include "sftp.h"
 #include <fcntl.h>
 #include <node_buffer.h>
@@ -468,20 +475,20 @@ int SFTP::startExec(eio_req *req)
   int res;
   channel = ssh_channel_new(pthis->m_ssh_session);
   if (!channel) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't create shh channel.");
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't create shh channel.\n");
     return 0;
   }
 
   res = ssh_channel_open_session(channel);
   if (res != SSH_OK) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't open shh channel.");
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't open shh channel.\n");
     ssh_channel_free(channel);
     return 0;
   }
   
   res = ssh_channel_request_exec(channel, pthis->m_path);
   if (res != SSH_OK) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec failed.");
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec failed.\n");
     ssh_channel_close(channel);
     ssh_channel_free(channel);
     return 0;
@@ -497,7 +504,8 @@ int SFTP::startExec(eio_req *req)
   }
 
   if (nbytes < 0) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec read error.");
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec read error.%s\n", 
+      ssh_get_error(pthis->m_ssh_session));
     ssh_channel_close(channel);
     ssh_channel_free(channel);
     return 0;
@@ -529,6 +537,7 @@ int SFTP::startSetPrvKey(eio_req *req)
     pthis->m_path, 0, NULL);		
   if (!pthis->m_prv_key) {
     snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't set private key.");
+    fprintf(stderr, pthis->m_path);
   }
   return 0;
 }
@@ -682,11 +691,11 @@ Handle<Value> SFTP::init(const Arguments &args)
     return False();
   
   Local<Object> opt = Local<Object>::Cast(args[0]);    
-  // TODO: free these!!!
   setOption(pthis->m_ssh_session, opt, "host", SSH_OPTIONS_HOST);
   setOption(pthis->m_ssh_session, opt, "port", SSH_OPTIONS_PORT_STR);
   setOption(pthis->m_ssh_session, opt, "user", SSH_OPTIONS_USER);
-  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) new long(10));
+  long timeout = 10;
+  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) &timeout);
   //ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_LOG_VERBOSITY, (void*) new int(SSH_LOG_PACKET));
   return True();  
 }
