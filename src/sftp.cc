@@ -14,7 +14,6 @@
 
 Persistent<FunctionTemplate> SFTP::constructor_template;
 Persistent<ObjectTemplate> SFTP::data_template;
-Persistent<String> SFTP::callback_symbol;
 
 static Persistent<FunctionTemplate> stats_constructor_template;
 
@@ -67,21 +66,15 @@ Local<Object> BuildStatsObject(sftp_attributes a) {
 *                 SFTP class
 ************************************************/
 
-SFTP::SFTP(const Arguments &) 
-  : m_ssh_session(NULL)
+SFTP::SFTP(const Arguments& args) 
+  : SSHBase(args)
   , m_sftp_session(NULL)  
-  , m_error(NULL)
   , m_path(NULL)
   , m_path2(NULL)
-  , m_list(NULL)
-  , m_wdata(NULL)  
-  , m_pub_key(NULL)
-  , m_prv_key(NULL)
+  , m_list(NULL) 
 {
   m_list = new ListNode();
   m_list->data = 0;
-  m_error = (char*) malloc (SFTP_MAX_ERROR);
-  //m_data = Persistent<Object>::New(data_template->NewInstance());
 }
 
 SFTP::~SFTP()
@@ -103,12 +96,6 @@ Handle<Value> SFTP::New(const Arguments &args)
   return args.This();
 }
 
-void SFTP::setCharData(char*& to, Local<Value> data)
-{
-  String::Utf8Value str(Local<Object>::Cast(data));
-  to = strdup(*str);
-}
-
 void SFTP::resetData()
 {
   if (m_error) 
@@ -121,9 +108,8 @@ void SFTP::resetData()
     delete m_list->next;
     m_list->next = NULL;
   } 
-  if (m_wdata)
-   free(m_wdata);
-  m_path = m_path2 = m_wdata = NULL;
+
+  m_path = m_path2 = NULL;
   m_size = m_pos = m_done = 0;
 }
 
@@ -133,52 +119,14 @@ void SFTP::freeSessions()
     sftp_free(m_sftp_session);  
     m_sftp_session = NULL;
   }  
-  if (m_ssh_session) {
-    ssh_disconnect(m_ssh_session);
-    ssh_free(m_ssh_session);
-    m_ssh_session = NULL;
-  }
+  SSHBase::freeSessions();
 }
 
 int SFTP::startConnect(eio_req *req)
 {
   SFTP* pthis = (SFTP*) req->data;
-  if (ssh_is_connected(pthis->m_ssh_session)) {
-     ssh_disconnect(pthis->m_ssh_session);   
-  }
-  int res = ssh_connect(pthis->m_ssh_session);
-  if (res != SSH_OK) {
-    //fprintf(stderr, "connection failed\n");
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, 
-            "Error connecting: %s\n",
-            ssh_get_error(pthis->m_ssh_session));
+  if (!SSHBase::startConnect(req))
     return 0;
-  }
-  //fprintf(stderr, "after connection\n");
-  // TODO: ssh_is_server_known() and warn the user if not...
-  
-  //res = ssh_userauth_password(pthis->m_ssh_session, NULL, *password);
-  if (pthis->m_prv_key && pthis->m_pub_key) {
-    res = ssh_userauth_pubkey (pthis->m_ssh_session,
-      NULL, pthis->m_pub_key, pthis->m_prv_key);	
-    
-    if (res != SSH_AUTH_SUCCESS)  {
-      snprintf(pthis->m_error, SFTP_MAX_ERROR, 
-        "Error authenticating with keys: %s\n",
-        ssh_get_error(pthis->m_ssh_session));
-      return 0;        
-    }  
-  }  
-  else {
-    res = ssh_userauth_autopubkey(pthis->m_ssh_session, NULL);
-    
-    if (res != SSH_AUTH_SUCCESS)  {
-      snprintf(pthis->m_error, SFTP_MAX_ERROR, 
-        "Error authenticating with password: %s\n",
-        ssh_get_error(pthis->m_ssh_session));
-      return 0;        
-    }
-  }
   
   if (!pthis->m_sftp_session)
     pthis->m_sftp_session = sftp_new(pthis->m_ssh_session);  
@@ -187,7 +135,7 @@ int SFTP::startConnect(eio_req *req)
     return 0;
   }  
 
-  res = sftp_init(pthis->m_sftp_session);
+  int res = sftp_init(pthis->m_sftp_session);
   if (res != SSH_OK) {
     snprintf(pthis->m_error, SFTP_MAX_ERROR, "Error initializing SFTP session: %d.\n", 
       sftp_get_error(pthis->m_sftp_session));
@@ -517,42 +465,6 @@ int SFTP::startExec(eio_req *req)
   return 0;
 }
 
-int SFTP::startSetPubKey(eio_req *req)
-{
-  SFTP* pthis = (SFTP*) req->data;
-
-  pthis->m_pub_key = publickey_from_file(pthis->m_ssh_session, 
-    pthis->m_path, NULL);  	
-  if (!pthis->m_pub_key) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't set public key.");
-  }
-  return 0;
-}
-
-int SFTP::startSetPrvKey(eio_req *req)
-{
-  SFTP* pthis = (SFTP*) req->data;
-  
-  pthis->m_prv_key = privatekey_from_file(pthis->m_ssh_session, 
-    pthis->m_path, 0, NULL);		
-  if (!pthis->m_prv_key) {
-    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't set private key.");
-    fprintf(stderr, pthis->m_path);
-  }
-  return 0;
-}
-
-int SFTP::onDone(eio_req *req)
-{
-  SFTP* pthis = (SFTP*) req->data;
-  HandleScope scope;
-  Handle<Value> argv[1];
-  argv[0] = String::New(pthis->m_error);
-  pthis->Emit(callback_symbol, 1, argv);
-  ev_unref(EV_DEFAULT_UC);
-  return 0;
-}
-
 int SFTP::onStat(eio_req *req)
 {
   SFTP* pthis = (SFTP*) req->data;
@@ -593,27 +505,7 @@ int SFTP::onList(eio_req *req)
   ev_unref(EV_DEFAULT_UC);
   return 0;
 }
-/*
-int SFTP::onList(eio_req *req)
-{
-  SFTP* pthis = (SFTP*) req->data;
-  HandleScope scope;
-  Handle<Value> argv[3];
-  argv[0] = String::New(pthis->m_error);
-  v8::Local<v8::Array> res = v8::Array::New();
-  v8::Local<v8::Array> attr = v8::Array::New();
-  ListNode* it = pthis->m_list;
-  for (int i=0; it->next; i++) {
-    it = it->next;
-    res->Set(Number::New(i), String::New(it->data)); 
-  }
-  argv[1] = res;
-  argv[2] = attr;
-  pthis->Emit(callback_symbol, 3, argv);
-  ev_unref(EV_DEFAULT_UC);
-  return 0;
-}
-*/
+
 void SFTP::Initialize(Handle<Object>& target)
 {
     HandleScope scope;
@@ -640,10 +532,10 @@ void SFTP::Initialize(Handle<Object>& target)
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "unlink", unlink);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "rmdir", rmdir);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "exec", exec);
-      NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPubKey", setPubKey);
-      NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPrvKey", setPrvKey);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPubKey", SSHBase::setPubKey);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPrvKey", SSHBase::setPrvKey);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "isConnected", isConnected);
-      NODE_SET_PROTOTYPE_METHOD(constructor_template, "interrupt", interrupt);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "interrupt", SSHBase::interrupt);
       callback_symbol = NODE_PSYMBOL("callback");
       
       stats_constructor_template = Persistent<FunctionTemplate>::New(
@@ -663,41 +555,9 @@ void SFTP::Initialize(Handle<Object>& target)
     );
 }
 
-inline void setOption(ssh_session& session, Local<Object>& obj, 
-                      const char* prop_name, ssh_options_e opt) 
-{
-  Local<Object> prop = Local<Object>::Cast(
-      obj->Get(String::NewSymbol(prop_name))
-  );
-  if (!prop->IsUndefined()) {
-      Local<String> value = prop->ToString();
-      char *cvalue = new char[ value->Length() + 1 ];
-      value->WriteAscii(cvalue); 
-      ssh_options_set(session, opt, cvalue);
-      delete cvalue;
-  }
-}
-
-
-
 Handle<Value> SFTP::init(const Arguments &args) 
 {  
-  HandleScope scope;
-  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This());
-  pthis->freeSessions();
-  
-  pthis->m_ssh_session = ssh_new();
-  if (!pthis->m_ssh_session)
-    return False();
-  
-  Local<Object> opt = Local<Object>::Cast(args[0]);    
-  setOption(pthis->m_ssh_session, opt, "host", SSH_OPTIONS_HOST);
-  setOption(pthis->m_ssh_session, opt, "port", SSH_OPTIONS_PORT_STR);
-  setOption(pthis->m_ssh_session, opt, "user", SSH_OPTIONS_USER);
-  long timeout = 10;
-  ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) &timeout);
-  //ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_LOG_VERBOSITY, (void*) new int(SSH_LOG_PACKET));
-  return True();  
+  return SSHBase::init(args);
 }
 
 Handle<Value> SFTP::connect(const Arguments &args) 
@@ -720,7 +580,7 @@ Handle<Value> SFTP::mkdir(const Arguments &args)
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   pthis->m_int = args[1]->Int32Value();
   eio_custom(startMkdir, EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC); 
@@ -732,7 +592,7 @@ Handle<Value> SFTP::writeFile(const Arguments &args)
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   Local<Object> buffer_obj = args[1]->ToObject();
   pthis->m_size = Buffer::Length(buffer_obj);
   pthis->m_wdata = (char*) malloc (pthis->m_size);
@@ -749,7 +609,7 @@ Handle<Value> SFTP::readFile(const Arguments &args)
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
   pthis->m_int = args[0]->Int32Value();
-  pthis->setCharData(pthis->m_path, args[1]);
+  setCharData(pthis->m_path, args[1]);
   eio_custom(startReadFile, EIO_PRI_DEFAULT, cbReadFile, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -760,7 +620,7 @@ Handle<Value> SFTP::listDir(const Arguments &args)
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   eio_custom(startListDir, EIO_PRI_DEFAULT, onList, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -770,8 +630,8 @@ Handle<Value>SFTP::rename(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
-  pthis->setCharData(pthis->m_path2, args[1]);
+  setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path2, args[1]);
   eio_custom(startRename , EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -781,7 +641,7 @@ Handle<Value>SFTP::chmod(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   pthis->m_int = args[1]->Int32Value();
   eio_custom(startChmod , EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC); 
@@ -792,7 +652,7 @@ Handle<Value>SFTP::chown(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   pthis->m_int = args[1]->Int32Value(); // uid
   pthis->m_int = args[2]->Int32Value(); // gid
   eio_custom(startChown , EIO_PRI_DEFAULT, onDone, pthis);
@@ -804,7 +664,7 @@ Handle<Value>SFTP::stat(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   eio_custom(startStat , EIO_PRI_DEFAULT, onStat, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -814,7 +674,7 @@ Handle<Value>SFTP::unlink(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   eio_custom(startUnlink, EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -824,7 +684,7 @@ Handle<Value>SFTP::rmdir(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   eio_custom(startRmdir, EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
@@ -834,28 +694,8 @@ Handle<Value>SFTP::exec(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
   pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
+  setCharData(pthis->m_path, args[0]);
   eio_custom(startExec, EIO_PRI_DEFAULT, onList, pthis);
-  ev_ref(EV_DEFAULT_UC); 
-  return True();
-}
-
-Handle<Value>SFTP::setPubKey(const Arguments &args){
-  HandleScope scope;
-  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
-  pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
-  eio_custom(startSetPubKey, EIO_PRI_DEFAULT, onList, pthis);
-  ev_ref(EV_DEFAULT_UC); 
-  return True();
-}
-
-Handle<Value>SFTP::setPrvKey(const Arguments &args){
-  HandleScope scope;
-  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
-  pthis->resetData();
-  pthis->setCharData(pthis->m_path, args[0]);
-  eio_custom(startSetPrvKey, EIO_PRI_DEFAULT, onList, pthis);
   ev_ref(EV_DEFAULT_UC); 
   return True();
 }
@@ -868,17 +708,6 @@ Handle<Value>SFTP::isConnected(const Arguments &args){
   return ret == 1 ? True() : False();
 }
 
-Handle<Value>SFTP::interrupt(const Arguments &args){
-  HandleScope scope;
-  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
-  //fprintf(stderr, "interrupt\n");
-  //ssh_disconnect(pthis->m_ssh_session);
-  //ssh_silent_disconnect(pthis->m_ssh_session);
-  ssh_set_fd_except(pthis->m_ssh_session);
-  pthis->freeSessions();
-  fprintf(stderr, "interrupted\n");
-  return True();
-}
 
 /***********************************************
 *           ListNode helper class

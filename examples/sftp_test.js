@@ -1,4 +1,4 @@
-var assert = require("../../cloud9test/server/c9/test/assert");
+var assert = require("../../../../cloud9test/server/c9/test/assert");
 var sftp = require('../index.js');
 var basePath = '/Development/sftptestdir';
 var fs = require('fs');

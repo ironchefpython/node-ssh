@@ -5,129 +5,40 @@
  * @license http://github.com/ajaxorg/node-ssh/blob/master/LICENSE MIT License
  */
 
-var sftp = require('./build/default/sftp');
+var ssh = require('./build/default/ssh');
 //var constants = sftp.constants;
 var fs = require("fs");
 var path = require('path');
 var constants = process.binding('constants');
+var sys = require('sys');
+var events = require('events');
 
-  /**
-   * blah
-   * 
-   * @param {String}       path
-   * @param {Function}     cb
-   * @type  {void}
-   */
 
-var tmpDir = (function() {
-    var value,
-        def     = "/tmp",
-        envVars = ["TMPDIR", "TMP", "TEMP"],
-        i       = 0,
-        l       = envVars.length;
-    for(; i < l; ++i) {
-        value = process.env[envVars[i]];
-        if (value)
-            return fs.realpathSync(value).replace(/\/+$/, "");
-    }
-    return fs.realpathSync(def).replace(/\/+$/, "");
-})();
+/**
+ *  Exported Object
+ */
+var SSH = module.exports = {};
 
-var uuid = function(len, radix) {
-   var i,
-       chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split(""),
-       uuid  = [],
-       rnd   = Math.random;
-   radix     = radix || chars.length;
 
-   if (len) {
-       // Compact form
-       for (i = 0; i < len; i++)
-           uuid[i] = chars[0 | rnd() * radix];
-   }
-   else {
-       // rfc4122, version 4 form
-       var r;
-       // rfc4122 requires these characters
-       uuid[8] = uuid[13] = uuid[18] = uuid[23] = "-";
-       uuid[14] = "4";
-
-       // Fill in random data.  At i==19 set the high bits of clock sequence as
-       // per rfc4122, sec. 4.1.5
-       for (i = 0; i < 36; i++) {
-           if (!uuid[i]) {
-               r = 0 | rnd() * 16;
-               uuid[i] = chars[(i == 19) ? (r & 0x3) | 0x8 : r & 0xf];
-           }
-       }
-   }
-
-   return uuid.join("");
-};
-
-sftp.Stats.prototype._checkModeProperty = function(property) {
-  return ((this.mode & constants.S_IFMT) === property);
-};
-
-sftp.Stats.prototype.isDirectory = function() {
-  return this._checkModeProperty(constants.S_IFDIR);
-};
-
-sftp.Stats.prototype.isFile = function() {
-  return this._checkModeProperty(constants.S_IFREG);
-};
-
-sftp.Stats.prototype.isBlockDevice = function() {
-  return this._checkModeProperty(constants.S_IFBLK);
-};
-
-sftp.Stats.prototype.isCharacterDevice = function() {
-  return this._checkModeProperty(constants.S_IFCHR);
-};
-
-sftp.Stats.prototype.isSymbolicLink = function() {
-  return this._checkModeProperty(constants.S_IFLNK);
-};
-
-sftp.Stats.prototype.isFIFO = function() {
-  return this._checkModeProperty(constants.S_IFIFO);
-};
-
-sftp.Stats.prototype.isSocket = function() {
-  return this._checkModeProperty(constants.S_IFSOCK);
-};
-
-var SFTP = module.exports = function () {
-  this._session = new sftp.SFTP();
-  this._tasks = [];
-  this._subTasks = [];
-  this._callback = false;
-  this.timeout = 0;
-  this.options = {};
-  this._stats = {};
-  this.setupEvent();
-};
-
-(function(){
+/**
+ *  Base class used by both ssh port forwarding and sftp
+ */
+function SSHBase(){
   this.setupEvent = function() {
     var _self = this;
     this._session.on('callback',function(error,result,more){
       //console.error("CALLBACK");
-      if (_self.timeout) {
-        clearTimeout(_self.timeout);
-        _self.timeout = 0;
+      if (_self._timeout) {
+        clearTimeout(_self._timeout);
+        _self._timeout = 0;
       }
       var cb = _self._tasks[0].cb;
       _self._tasks.shift();
+      _self._cb = true;
       if (cb && typeof cb == "function"){
-        _self._subTasks = [];
-        _self._callback = true;
-        cb(error,result,more);
-        _self._callback = false;
-        if (_self._subTasks.length){
-          _self._tasks = _self._subTasks.concat(_self._tasks);        
-        }  
+        cb(error,result,more);  
       }  
+      _self._cb = false;
       _self._executeNext();
     });    
   };
@@ -139,43 +50,39 @@ var SFTP = module.exports = function () {
         cb:cb
       };
     
-    if (this._callback) {
-      //console.error("cb: ", cmd);
-      this._subTasks.push(task);
-    }
-    else {
-      //console.error("norm: ", cmd);
       this._tasks.push(task);
-      if (this._tasks.length == 1)
+      if (this._tasks.length == 1 && !this._cb)
         this._executeNext();
-    }
   };
   
   this._executeNext = function() {
     var self = this;
     if (this._tasks.length>0) {
-//      console.error('execute: ', this._tasks[0].cmd);
-      if (this.timeout) {
-        clearTimeout(this.timeout);
+      //console.error('execute: ', this._tasks[0].cmd);
+      if (this._timeout) {
+        clearTimeout(this._timeout);
       }
-      this.timeout = setTimeout(function(){
-        clearTimeout(this.timeout);
-        self.timeout = 0;        
+      // setting a timeout, if it times out, we have to interrupt the blocking
+      // operation, then trying to reconnect, if that fails too, we report the
+      // error
+      this._timeout = setTimeout(function(){
+        clearTimeout(this._timeout);
+        self._timeout = 0;        
         console.error("error: sftp timeout");
         self._session.removeAllListeners("callback");
         self._session.interrupt();
         if (self._reconnect) {
           self._reconnect = false;
-          return self._lastCb("Error: SFTP: Connection lost, reconnect timed out.");
+          return self._lastCb("Error: SSH: Connection lost, reconnect timed out.");
         }
-        self._session = new sftp.SFTP();
+        self._recreate();
         var oldTasks = self._tasks;
         self._lastCb = self._tasks[0].cb;
         self._tasks = [];
         self.setupEvent();
         self._reconnect = true;
-        self.init(self.options, function(err){
-            console.error("sftp reinit");
+        self.init(self._options, function(err){
+            console.error("ssh reinit");
             if (err)
               return self._lastCb(
                 "Error: SFTP: Connection lost reconnect init error: " + err);
@@ -183,15 +90,18 @@ var SFTP = module.exports = function () {
             self.connect(function(err){
               console.error("reconnect");
               return self._lastCb(
-                "Error: SFTP: Connection lost reconnect error: " + err);
+                "Error: SSH: Connection lost reconnect error: " + err);
                 
               self._reconnect = false;
               self._tasks = oldTasks;
             });  
         });
       }, 15000);
+      
+      // if the command starts with '_' that means it's a javascript function 
+      // to call, otherwise it's a c++ function on _session: 
       if (this._tasks[0].cmd.indexOf("_") === 0)
-        this[this._tasks[0].cmd].apply(this, this._tasks[0].args);
+        this[this._tasks[0].cmd].apply(this, this._tasks[0].args);            
       else  {
         this._session[this._tasks[0].cmd].apply(this._session, this._tasks[0].args);      
       }
@@ -200,10 +110,10 @@ var SFTP = module.exports = function () {
     {
       // no commands left, let's send out a command after a while for
       // stay alive
-      this.timeout = setInterval(function(){
+      this._timeout = setInterval(function(){
         self.stat("");},100000);
     }
-  };
+  };  
   
   this.init = function(options, cb) {        
     if (!options || 
@@ -215,7 +125,7 @@ var SFTP = module.exports = function () {
       cb = function(){};
     var self = this;  
     this._session.init(options);
-    this.options = options;
+    this._options = options;
     if (options.pubKey && options.prvKey) {      
       this.setPubKey(options.pubKey, function(error){
         if (error)
@@ -252,7 +162,7 @@ var SFTP = module.exports = function () {
       if (error)
         return cb(error);
       _self._addCommand("setPrvKey", [tmp], function(error) {
-        fs.unlink(tmp);
+        //fs.unlink(tmp);
         cb(error);
       });
     });      
@@ -260,10 +170,53 @@ var SFTP = module.exports = function () {
   
   this.connect = function(cb) {
     this._addCommand("connect", [], cb);
+  };  
+  
+  this._openTmpFile = function() {
+    var tmpFile = tmpDir + "/" + uuid();
+    var _self = this;
+    fs.open(tmpFile, "w+", function(error, fd) {      
+      _self._session.emit("callback", error, {fd:fd, path:tmpFile});
+    });
   };
 
+  this._writeTmpFile = function(data) {
+    var tmpFile = tmpDir + "/" + uuid();
+    var _self = this;
+    fs.writeFile(tmpFile, data, function(error) {      
+      _self._session.emit("callback", error, tmpFile);
+    });
+  };
+
+  this._readTmpFile = function(path) {
+    var _self = this;
+    fs.readFile(path, function(error, data) {
+      _self._session.emit("callback", error, data);
+      fs.unlink(path);
+    });
+  };  
+}
+
+var SFTP = SSH.sftp = function () {
+  this._session = new ssh.SFTP();
+  this._tasks = [];
+  this._subTasks = [];
+  this._callback = false;
+  this._timeout = 0;
+  this._options = {};
+  this._stats = {};
+  this.setupEvent();
+};
+
+(function(){
+  SSHBase.call(this);
+  
   this.isConnected = function() {
     return this._session.isConnected();
+  };
+  
+  this._recreate = function() {
+    this._session = new ssh.SFTP();  
   };
   
   /**
@@ -377,30 +330,6 @@ var SFTP = module.exports = function () {
         //console.error("stat: ", i, stats[i], stats[i].isDirectory());
       }
       cb(err, entries);
-    });
-  };
-  
-  this._openTmpFile = function() {
-    var tmpFile = tmpDir + "/" + uuid();
-    var _self = this;
-    fs.open(tmpFile, "w+", function(error, fd) {      
-      _self._session.emit("callback", error, {fd:fd, path:tmpFile});
-    });
-  };
-
-  this._writeTmpFile = function(data) {
-    var tmpFile = tmpDir + "/" + uuid();
-    var _self = this;
-    fs.writeFile(tmpFile, data, function(error) {      
-      _self._session.emit("callback", error, tmpFile);
-    });
-  };
-
-  this._readTmpFile = function(path) {
-    var _self = this;
-    fs.readFile(path, function(error, data) {
-      _self._session.emit("callback", error, data);
-      fs.unlink(path);
     });
   };
 
@@ -527,4 +456,155 @@ var SFTP = module.exports = function () {
   };
   
 }).call(SFTP.prototype);
+
+var Tunnel = SSH.tunnel = function () {
+  events.EventEmitter.call(this);
+  this._session = new ssh.Tunnel();
+  this._tasks = [];
+  this._subTasks = [];
+  this._callback = false;
+  this._timeout = 0;
+  this._options = {};
+  this._stats = {};
+  this.setupEvent();
+};
+
+sys.inherits(Tunnel, events.EventEmitter);
+
+(function(){
+  SSHBase.call(this);
+
+  this._recreate = function() {
+    this._session = new ssh.Tunnel();  
+  };
+
+  this.write = function(data, cb) {
+    if (typeof data === 'string') {
+      data = new Buffer(data);
+      //console.log(data);
+    }
+      
+    if (typeof data !== "object")
+      throw new Error('Invalid argument.');
+
+    this._addCommand("write", [data], cb);
+  };
+  
+  this.read = function(cb) {    
+    var self = this;
+    this._addCommand("read", [], cb);
+    //function(error, data) {
+    //  if (error || data) {
+    //      self.emmit("data", error, data);
+    //  }  
+    //});
+  };
+  
+  this.startReading = function() {
+      var self = this;
+      var cb = function(){
+        //console.log(".");
+        self.read(function(err, data) {
+          if (err) {
+            console.log(err);            
+          }  
+          if (data) {
+            //console.log(data.toString());                        
+          }  
+          self.emit("data", err, data);
+          setTimeout(cb, data ? 10 : 500);
+        });
+      };
+      setTimeout(cb,500);
+  };
+  
+  this.connect = function(cb) {
+    var self = this;
+    this._addCommand("connect", [], function(err){
+      self.startReading();
+      cb(err);
+    });
+  };
+}).call(Tunnel.prototype);
+
+
+// UTILS
+
+var tmpDir = (function() {
+    var value,
+        def     = "/tmp",
+        envVars = ["TMPDIR", "TMP", "TEMP"],
+        i       = 0,
+        l       = envVars.length;
+    for(; i < l; ++i) {
+        value = process.env[envVars[i]];
+        if (value)
+            return fs.realpathSync(value).replace(/\/+$/, "");
+    }
+    return fs.realpathSync(def).replace(/\/+$/, "");
+})();
+
+var uuid = function(len, radix) {
+   var i,
+       chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split(""),
+       uuid  = [],
+       rnd   = Math.random;
+   radix     = radix || chars.length;
+
+   if (len) {
+       // Compact form
+       for (i = 0; i < len; i++)
+           uuid[i] = chars[0 | rnd() * radix];
+   }
+   else {
+       // rfc4122, version 4 form
+       var r;
+       // rfc4122 requires these characters
+       uuid[8] = uuid[13] = uuid[18] = uuid[23] = "-";
+       uuid[14] = "4";
+
+       // Fill in random data.  At i==19 set the high bits of clock sequence as
+       // per rfc4122, sec. 4.1.5
+       for (i = 0; i < 36; i++) {
+           if (!uuid[i]) {
+               r = 0 | rnd() * 16;
+               uuid[i] = chars[(i == 19) ? (r & 0x3) | 0x8 : r & 0xf];
+           }
+       }
+   }
+
+   return uuid.join("");
+};
+
+ssh.Stats.prototype._checkModeProperty = function(property) {
+  return ((this.mode & constants.S_IFMT) === property);
+};
+
+ssh.Stats.prototype.isDirectory = function() {
+  return this._checkModeProperty(constants.S_IFDIR);
+};
+
+ssh.Stats.prototype.isFile = function() {
+  return this._checkModeProperty(constants.S_IFREG);
+};
+
+ssh.Stats.prototype.isBlockDevice = function() {
+  return this._checkModeProperty(constants.S_IFBLK);
+};
+
+ssh.Stats.prototype.isCharacterDevice = function() {
+  return this._checkModeProperty(constants.S_IFCHR);
+};
+
+ssh.Stats.prototype.isSymbolicLink = function() {
+  return this._checkModeProperty(constants.S_IFLNK);
+};
+
+ssh.Stats.prototype.isFIFO = function() {
+  return this._checkModeProperty(constants.S_IFIFO);
+};
+
+ssh.Stats.prototype.isSocket = function() {
+  return this._checkModeProperty(constants.S_IFSOCK);
+};
 

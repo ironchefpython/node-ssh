@@ -24,14 +24,14 @@ def configure(conf):
         conf.fatal('libssh pkg-config package (libssh.pc) not found')
 
 def build(bld):
-    sftp = bld.new_task_gen('cxx', 'shlib', 'node_addon')
-    sftp.target = 'sftp'
-    sftp.source = [
-        'src/init.cc', 'src/sftp.cc'
+    ssh = bld.new_task_gen('cxx', 'shlib', 'node_addon')
+    ssh.target = 'ssh'
+    ssh.source = [
+        'src/init.cc', 'src/sshBase.cc', 'src/sftp.cc', 'src/tunnel.cc'
     ]
-    sftp.cxxflags = [ '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE' ]
-    sftp.cxxflags.append(
+    ssh.cxxflags = [ '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE' ]
+    ssh.cxxflags.append(
         os.popen('pkg-config --cflags libssh').readline().strip()
     )
     
-    sftp.uselib = 'SSH'
+    ssh.uselib = 'SSH'

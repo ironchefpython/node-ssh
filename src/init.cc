@@ -6,6 +6,7 @@
  */
 
 #include "sftp.h"
+#include "tunnel.h"
 #include <libssh/callbacks.h>
 
 #include <errno.h>
@@ -78,5 +79,6 @@ void init(Handle<Object> target)
     
     HandleScope scope;
     SFTP::Initialize(target);
+    Tunnel::Initialize(target);
 }
 } //extern "C"

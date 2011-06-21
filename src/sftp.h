@@ -17,6 +17,7 @@
 #include <libssh/sftp.h>
 #include <libssh/callbacks.h>
 
+#include "sshBase.h"
 //#include <cerrno>
 
 using namespace v8;
@@ -31,18 +32,12 @@ struct ListNode {
   void add(const char* data, sftp_attributes attr=NULL );
 };
 
-class SFTP : EventEmitter {
+class SFTP : public SSHBase {
 private:
-    ssh_session m_ssh_session;
     sftp_session m_sftp_session;
     sftp_file m_sftp_file;
-    ssh_string m_pub_key;
-    ssh_private_key m_prv_key;
-    int m_done;
-    char* m_error;
     ListNode* m_list;
     sftp_attributes m_stat;
-    char* m_wdata;
     char* m_path;
     char* m_path2;
     size_t m_size;
@@ -51,8 +46,7 @@ private:
     int m_int2;
   
     static Persistent<FunctionTemplate> constructor_template;
-    static Persistent<ObjectTemplate> data_template;
-    static Persistent<String> callback_symbol;
+    static Persistent<ObjectTemplate> data_template;    
     
     static int startConnect(eio_req *req);
     static int startMkdir(eio_req *req);
@@ -70,15 +64,11 @@ private:
     static int startUnlink(eio_req *req);
     static int startRmdir(eio_req *req);
     static int startExec(eio_req *req);
-    static int startSetPubKey(eio_req *req);
-    static int startSetPrvKey(eio_req *req);    
-    static int onDone(eio_req *req);
     static int onStat(eio_req *req);
     static int onList(eio_req *req);
 
-    void freeSessions();
-    void setCharData(char*& to, Local<Value> data);
-    void resetData();
+    virtual void freeSessions();
+    virtual void resetData();
 protected:
     static Handle<Value> New(const Arguments &args);
 
@@ -101,10 +91,7 @@ public:
     static Handle<Value> unlink(const Arguments &args);
     static Handle<Value> rmdir(const Arguments &args);
     static Handle<Value> exec(const Arguments &args);
-    static Handle<Value> setPubKey(const Arguments &args);
-    static Handle<Value> setPrvKey(const Arguments &args);
     static Handle<Value> isConnected(const Arguments &args);
-    static Handle<Value> interrupt(const Arguments &args);
 };
 
 #endif
