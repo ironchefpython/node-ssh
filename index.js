@@ -466,7 +466,7 @@ var SFTP = SSH.sftp = function () {
       for (var key in options.env)
         command = key + "=" + options.env[key] + " && " + command;      
     if (args)
-      command = command + " " + args.join(" ");
+      command = command + " '" + args.join("' '") + "'";
     var child = new Child(this);
     this._session.on("stderr", function(data){
       child.stderr.emit("data", data);
