@@ -689,7 +689,7 @@ void SFTP::Initialize(Handle<Object>& target)
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPrvKey", SSHBase::setPrvKey);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "isConnected", isConnected);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "interrupt", SSHBase::interrupt);
-      NODE_SET_PROTOTYPE_METHOD(constructor_template, "kill", SSHBase::kill);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "kill", kill);
       callback_symbol = NODE_PSYMBOL("callback");
       stdout_symbol = NODE_PSYMBOL("stdout");;
       stderr_symbol = NODE_PSYMBOL("stderr");;
