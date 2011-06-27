@@ -96,7 +96,7 @@ int Tunnel::startRead(eio_req *req)
   Tunnel* pthis = (Tunnel*) req->data;
   int available = ssh_channel_poll(pthis->m_ssh_channel, 0);
   if (available) {
-    int res = ssh_channel_read_nonblocking(pthis->m_ssh_channel,
+    int res = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_rdata,SSH_MIN(available, SSH_READ_BUFFER_SIZE),0);
     if (res<0) {
         snprintf(pthis->m_error, SSH_MAX_ERROR, 
@@ -109,19 +109,6 @@ int Tunnel::startRead(eio_req *req)
     }
   }  
   return 0;
-}
-
-Handle<Value> createBuffer(char* data, size_t size) 
-{
-  node::Buffer *slowBuffer = node::Buffer::New(size);
-  memcpy(node::Buffer::Data(slowBuffer), data, size);
-  Local<Object> globalObj = Context::GetCurrent()->Global();
-  Local<Function> bufferConstructor = 
-    Local<Function>::Cast(globalObj->Get(String::New("Buffer")));
-  Handle<Value> constructorArgs[3] = 
-    { slowBuffer->handle_, Integer::New(size), Integer::New(0) };
-  Local<Object> ret = bufferConstructor->NewInstance(3, constructorArgs);
-  return ret;
 }
 
 int Tunnel::onRead(eio_req *req)

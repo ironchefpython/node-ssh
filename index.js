@@ -449,10 +449,35 @@ var SFTP = SSH.sftp = function () {
   this.exec = function(command, cb) {
     if (typeof command !== "string")
       throw new Error('Invalid argument.');
+    if (this._options.cwd)
+        command = "cd " +this._options.cwd + "; " + command;
     this._addCommand("exec", [command], function(error, data){
       if (cb)
         cb(error, data ? data.join("") : data);
     });    
+  };
+
+  this.spawn = function(command, args, options) {
+    if (typeof command !== "string")
+      throw new Error('Invalid argument.');
+    if (options && options.cwd)
+      command = "cd " + options.cwd + " && " + command;
+    if (options && options.env)
+      for (var key in options.env)
+        command = key + "=" + options.env[key] + " && " + command;      
+    if (args)
+      command = command + " " + args.join(" ");
+    var child = new Child(this);
+    this._session.on("stderr", function(data){
+      child.stderr.emit("data", data);
+    });
+    this._session.on("stdout", function(data){
+      child.stdout.emit("data", data);
+    });
+    this._addCommand("spawn", [command], function(exit, error){
+        child.emit("exit", exit, error);
+    });
+    return child;
   };
   
 }).call(SFTP.prototype);
@@ -575,6 +600,18 @@ var uuid = function(len, radix) {
 
    return uuid.join("");
 };
+
+var Child = function(sftp){
+  events.EventEmitter.call(this);
+  this._sftp = sftp;
+  this.stdout = new events.EventEmitter();
+  this.stderr = new events.EventEmitter();
+  this.kill = function(){
+    this._sftp.kill();
+  }
+}
+
+sys.inherits(Child, events.EventEmitter);
 
 ssh.Stats.prototype._checkModeProperty = function(property) {
   return ((this.mode & constants.S_IFMT) === property);

@@ -36,12 +36,14 @@ class SFTP : public SSHBase {
 private:
     sftp_session m_sftp_session;
     sftp_file m_sftp_file;
+    ssh_channel m_ssh_channel;
     ListNode* m_list;
     sftp_attributes m_stat;
     char* m_path;
     char* m_path2;
     size_t m_size;
-    size_t m_pos;
+    size_t m_size2;
+    size_t m_pos;     
     int m_int;
     int m_int2;
   
@@ -56,6 +58,9 @@ private:
     static int startReadFile(eio_req *req);
     static int continueReadFile(eio_req *req);
     static int cbReadFile(eio_req *req);
+    static int startSpawn(eio_req *req);
+    static int continueSpawn(eio_req *req);
+    static int cbSpawn(eio_req *req);
     static int startListDir(eio_req *req);
     static int startRename(eio_req *req);
     static int startChmod(eio_req *req);
@@ -66,6 +71,7 @@ private:
     static int startExec(eio_req *req);
     static int onStat(eio_req *req);
     static int onList(eio_req *req);
+    static int onExit(eio_req *req);
 
     virtual void freeSessions();
     virtual void resetData();
@@ -91,7 +97,9 @@ public:
     static Handle<Value> unlink(const Arguments &args);
     static Handle<Value> rmdir(const Arguments &args);
     static Handle<Value> exec(const Arguments &args);
+    static Handle<Value> spawn(const Arguments &args);
     static Handle<Value> isConnected(const Arguments &args);
+    static Handle<Value> kill(const Arguments &args);
 };
 
 #endif

@@ -32,6 +32,8 @@ protected:
     char* m_wdata;
     
     static Persistent<String> callback_symbol;
+    static Persistent<String> stdout_symbol;
+    static Persistent<String> stderr_symbol;    
     
     static int startSetPubKey(eio_req *req);
     static int startSetPrvKey(eio_req *req); 
@@ -58,5 +60,6 @@ void setOption(ssh_session& session, Local<Object>& obj, const char* prop_name,
 void setMember(char*& member, Local<Object>& obj, const char* prop_name);
 void setMember(int& member, Local<Object>& obj, const char* prop_name);
 void setCharData(char*& to, Local<Value> data);
+Handle<Value> createBuffer(char* data, size_t size);
 
 #endif

@@ -14,6 +14,8 @@
 ************************************************/
 
 Persistent<String> SSHBase::callback_symbol;
+Persistent<String> SSHBase::stdout_symbol;
+Persistent<String> SSHBase::stderr_symbol;
 
 SSHBase::SSHBase(const Arguments &) 
   : m_ssh_session(NULL)
@@ -36,6 +38,19 @@ SSHBase::~SSHBase()
   if (m_wdata)
    free(m_wdata);
   m_wdata = NULL;    
+}
+
+Handle<Value> createBuffer(char* data, size_t size) 
+{
+  node::Buffer *slowBuffer = node::Buffer::New(size);
+  memcpy(node::Buffer::Data(slowBuffer), data, size);
+  Local<Object> globalObj = Context::GetCurrent()->Global();
+  Local<Function> bufferConstructor = 
+    Local<Function>::Cast(globalObj->Get(String::New("Buffer")));
+  Handle<Value> constructorArgs[3] = 
+    { slowBuffer->handle_, Integer::New(size), Integer::New(0) };
+  Local<Object> ret = bufferConstructor->NewInstance(3, constructorArgs);
+  return ret;
 }
 
 void setCharData(char*& to, Local<Value> data)

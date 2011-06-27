@@ -465,6 +465,158 @@ int SFTP::startExec(eio_req *req)
   return 0;
 }
 
+int SFTP::startSpawn(eio_req *req)
+{
+  SFTP* pthis = (SFTP*) req->data;
+  
+  int res;
+  pthis->m_ssh_channel = ssh_channel_new(pthis->m_ssh_session);
+  if (!pthis->m_ssh_channel) {
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't create shh channel.\n");
+    pthis->m_done = 1;
+    return 0;
+  }
+
+  res = ssh_channel_open_session(pthis->m_ssh_channel);
+  if (res != SSH_OK) {
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't open shh channel.\n");
+    ssh_channel_free(pthis->m_ssh_channel);
+    pthis->m_ssh_channel = NULL;
+    pthis->m_done = 1;
+    return 0;
+  }
+
+  res = ssh_channel_request_pty(pthis->m_ssh_channel);
+  if (res != SSH_OK) {
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "Can't request pty.\n");
+    ssh_channel_free(pthis->m_ssh_channel);
+    pthis->m_ssh_channel = NULL;
+    pthis->m_done = 1;
+    return 0;
+  }
+
+  res = ssh_channel_request_exec(pthis->m_ssh_channel, pthis->m_path);
+  if (res != SSH_OK) {
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec failed.\n");
+    ssh_channel_close(pthis->m_ssh_channel);
+    ssh_channel_free(pthis->m_ssh_channel);
+    pthis->m_ssh_channel = NULL;
+    pthis->m_done = 1;
+    return 0;
+  }
+  free(pthis->m_path);
+  pthis->m_path = (char*)malloc(1024);
+  pthis->m_path2 = (char*)malloc(1024);
+  return 0;
+}
+
+int SFTP::continueSpawn(eio_req *req)
+{
+  //fprintf(stderr, "read cont\n");
+  SFTP* pthis = (SFTP*) req->data;
+  //int nbytes = ssh_channel_read(pthis->m_ssh_channel,
+  //            pthis->m_path,1,0);              
+  
+  int available, available2;
+  pthis->m_size = pthis->m_size2 = 0;
+  if (pthis->m_done) {
+    // this should only happen if the remote process needs to be killed (kill function)
+    ssh_channel_write(pthis->m_ssh_channel, (const char*) 0x03, 1);  
+    return 0;
+  }
+  
+  //fprintf(stderr, "1\n");
+  // poll and read if available stdout
+  available = ssh_channel_poll(pthis->m_ssh_channel, 0);
+  if (available == SSH_EOF)
+    available = 1024;
+  if (available) {
+    //fprintf(stderr, "2\n");
+    pthis->m_size = ssh_channel_read(pthis->m_ssh_channel,
+      pthis->m_path,SSH_MIN(available, 1024),0);
+    if (pthis->m_size==0)
+      pthis->m_done = 1;
+  }
+  else if (available < 0) {
+    //fprintf(stderr, "3\n");
+    pthis->m_done = 1;
+  }  
+  // poll and read if available stderr
+  available2 = ssh_channel_poll(pthis->m_ssh_channel, 1);
+  if (available2 == SSH_EOF)
+    available2 = 1024;
+  if (available2) {
+    //fprintf(stderr, "4\n");
+    pthis->m_size2 = ssh_channel_read(pthis->m_ssh_channel,
+      pthis->m_path2,SSH_MIN(available2, 1024),1);
+    if (pthis->m_size2==0)
+      pthis->m_done = 1;       
+  }
+  else if (available2 < 0) {
+    //fprintf(stderr, "5\n");
+    pthis->m_done = 1;
+  }
+  
+  if (available==0 && available2==0)
+    ev_sleep(0.1);
+  
+  //fprintf(stderr, "6\n");
+  if (pthis->m_size < 0 || pthis->m_size2 < 0) {
+    //fprintf(stderr, "7\n");
+    snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec read error.%s\n", 
+      ssh_get_error(pthis->m_ssh_session));
+    pthis->m_done = 1;
+    return 0;
+  }
+  
+  return 0;
+}
+
+int SFTP::cbSpawn(eio_req *req)
+{
+  SFTP* pthis = (SFTP*) req->data;
+  HandleScope scope;    
+  if (pthis->m_size) {
+    Handle<Value> argv[1];
+    argv[0] = createBuffer(pthis->m_path, pthis->m_size);  
+    pthis->Emit(stdout_symbol, 1, argv);
+  }
+  if (pthis->m_size2) {
+    Handle<Value> argv[1];
+    argv[0] = createBuffer(pthis->m_path2, pthis->m_size2);  
+    pthis->Emit(stderr_symbol, 1, argv);
+  }  
+  
+  if (pthis->m_done) {
+    pthis->onExit(req);
+  }
+  else {
+    eio_custom(continueSpawn, EIO_PRI_DEFAULT, cbSpawn, pthis);
+  }  
+  return 0; 
+}
+
+int SFTP::onExit(eio_req *req)
+{
+  SFTP* pthis = (SFTP*) req->data;
+  HandleScope scope;
+  Handle<Value> argv[2];
+  int exit = -1;
+  if (pthis->m_ssh_channel) {    
+    if (!pthis->m_error)
+      ssh_channel_send_eof(pthis->m_ssh_channel);
+    ssh_channel_close(pthis->m_ssh_channel);
+    exit = ssh_channel_get_exit_status(pthis->m_ssh_channel);
+    ssh_channel_free(pthis->m_ssh_channel);
+    pthis->m_ssh_channel = NULL;
+  }  
+  argv[0] = Integer::New(exit); 
+  argv[1] = String::New(pthis->m_error);
+  pthis->Emit(callback_symbol, 2, argv);
+  ev_unref(EV_DEFAULT_UC);
+  return 0;
+}
+
 int SFTP::onStat(eio_req *req)
 {
   SFTP* pthis = (SFTP*) req->data;
@@ -532,11 +684,15 @@ void SFTP::Initialize(Handle<Object>& target)
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "unlink", unlink);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "rmdir", rmdir);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "exec", exec);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "spawn", spawn);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPubKey", SSHBase::setPubKey);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPrvKey", SSHBase::setPrvKey);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "isConnected", isConnected);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "interrupt", SSHBase::interrupt);
+      NODE_SET_PROTOTYPE_METHOD(constructor_template, "kill", SSHBase::kill);
       callback_symbol = NODE_PSYMBOL("callback");
+      stdout_symbol = NODE_PSYMBOL("stdout");;
+      stderr_symbol = NODE_PSYMBOL("stderr");;
       
       stats_constructor_template = Persistent<FunctionTemplate>::New(
         FunctionTemplate::New());
@@ -700,6 +856,16 @@ Handle<Value>SFTP::exec(const Arguments &args){
   return True();
 }
 
+Handle<Value>SFTP::spawn(const Arguments &args){
+  HandleScope scope;
+  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
+  pthis->resetData();
+  setCharData(pthis->m_path, args[0]);
+  eio_custom(startSpawn, EIO_PRI_DEFAULT, cbSpawn, pthis);
+  ev_ref(EV_DEFAULT_UC); 
+  return True();
+}
+
 Handle<Value>SFTP::isConnected(const Arguments &args){
   HandleScope scope;
   SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
@@ -708,6 +874,12 @@ Handle<Value>SFTP::isConnected(const Arguments &args){
   return ret == 1 ? True() : False();
 }
 
+Handle<Value>SFTP::kill(const Arguments &args){
+  HandleScope scope;
+  SFTP *pthis = ObjectWrap::Unwrap<SFTP>(args.This()); 
+  pthis->m_done = 1;
+  return True();
+}
 
 /***********************************************
 *           ListNode helper class
