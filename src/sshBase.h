@@ -14,6 +14,7 @@
 #include <v8.h>
 
 #include <libssh/libssh.h>
+#include <stdlib.h>
 
 using namespace v8;
 using namespace node;
