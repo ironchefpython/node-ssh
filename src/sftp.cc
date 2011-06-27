@@ -534,8 +534,11 @@ int SFTP::continueSpawn(eio_req *req)
     //fprintf(stderr, "2\n");
     pthis->m_size = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_path,SSH_MIN(available, 1024),0);
-    if (pthis->m_size==0)
+    if (pthis->m_size<=0)
       pthis->m_done = 1;
+	if (pthis->m_size < 0) {
+		pthis->m_size = 0;
+	}  
   }
   else if (available < 0) {
     //fprintf(stderr, "3\n");
@@ -549,8 +552,11 @@ int SFTP::continueSpawn(eio_req *req)
     //fprintf(stderr, "4\n");
     pthis->m_size2 = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_path2,SSH_MIN(available2, 1024),1);
-    if (pthis->m_size2==0)
-      pthis->m_done = 1;       
+	  if (pthis->m_size2<=0)
+		  pthis->m_done = 1;
+	  if (pthis->m_size2 < 0) {
+		  pthis->m_size2 = 0;
+	  }  
   }
   else if (available2 < 0) {
     //fprintf(stderr, "5\n");
