@@ -507,6 +507,7 @@ int SFTP::startSpawn(eio_req *req)
   free(pthis->m_path);
   pthis->m_path = (char*)malloc(1024);
   pthis->m_path2 = (char*)malloc(1024);
+  pthis->m_size = pthis->m_size2 = 0;
   return 0;
 }
 
@@ -584,11 +585,13 @@ int SFTP::cbSpawn(eio_req *req)
   HandleScope scope;    
   if (pthis->m_size) {
     Handle<Value> argv[1];
+    //fprintf(stderr, "std: %d %s\n", pthis->m_size, pthis->m_path);
     argv[0] = createBuffer(pthis->m_path, pthis->m_size);  
     pthis->Emit(stdout_symbol, 1, argv);
   }
   if (pthis->m_size2) {
     Handle<Value> argv[1];
+    //fprintf(stderr, "stderr: %d %s\n", pthis->m_size2, pthis->m_path2);    
     argv[0] = createBuffer(pthis->m_path2, pthis->m_size2);  
     pthis->Emit(stderr_symbol, 1, argv);
   }  

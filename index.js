@@ -27,17 +27,18 @@ function SSHBase(){
   this.setupEvent = function() {
     var _self = this;
     this._session.on('callback',function(error,result,more){
-      //console.error("CALLBACK");
+      //console.error("CALLBACK", _self._tasks[0].cmd);
       if (_self._timeout) {
+        //console.error('clearTIMEOUT: ', _self._timeout);  
         clearTimeout(_self._timeout);
         _self._timeout = 0;
       }
-      var cb = _self._tasks[0].cb;
-      _self._tasks.shift();
+      var cb = _self._tasks[0].cb;      
       _self._cb = true;
       if (cb && typeof cb == "function"){
         cb(error,result,more);  
       }  
+      _self._tasks.shift();
       _self._cb = false;
       _self._executeNext();
     });    
@@ -49,8 +50,9 @@ function SSHBase(){
         args:args, 
         cb:cb
       };
-    
+    //console.error("add: ", cmd, this._tasks.length);      
       this._tasks.push(task);
+      //console.error(this._tasks.length);
       if (this._tasks.length == 1 && !this._cb)
         this._executeNext();
   };
@@ -65,6 +67,7 @@ function SSHBase(){
       // setting a timeout, if it times out, we have to interrupt the blocking
       // operation, then trying to reconnect, if that fails too, we report the
       // error
+      if (this._tasks[0].cmd != 'spawn')
       this._timeout = setTimeout(function(){
         clearTimeout(this._timeout);
         self._timeout = 0;        
@@ -96,8 +99,8 @@ function SSHBase(){
               self._tasks = oldTasks;
             });  
         });
-      }, 15000);
-      
+      }, 25000);
+      //console.error('setTIMEOUT: ', this._timeout);
       // if the command starts with '_' that means it's a javascript function 
       // to call, otherwise it's a c++ function on _session: 
       if (this._tasks[0].cmd.indexOf("_") === 0)
@@ -475,6 +478,7 @@ var SFTP = SSH.sftp = function () {
       child.stdout.emit("data", data);
     });
     this._addCommand("spawn", [command], function(exit, error){
+        console.log("FFS!!!!!!!!!!!!!!!");
         child.emit("exit", exit, error);
     });
     return child;
@@ -607,7 +611,7 @@ var Child = function(sftp){
   this.stdout = new events.EventEmitter();
   this.stderr = new events.EventEmitter();
   this.kill = function(){
-    this._sftp.kill();
+    this._sftp._session.kill();
   }
 }
 
