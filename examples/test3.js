@@ -60,5 +60,38 @@ client.init(options, function(err){
     blah.stderr.on("data", function(data){
         console.log("stderr: ", data.toString());
     });
+    setTimeout(function(data){
+            console.error("*******************************************timeout");
+            blah.kill();
+            blah = client.spawn("node ./blah.js");
+            blah.on("exit", function(code, err){
+                console.log("exit: ", code, err);
+            }); 
+            blah.stdout.on("data", function(data){
+                console.log("stdout: ", data.toString());
+            });
+            blah.stderr.on("data", function(data){
+                console.log("stderr: ", data.toString());
+            });
+            setTimeout(function(data){
+                console.error("*******************************************timeout2");
+                blah.kill();
+                blah = client.spawn("node ./blah.js");
+                blah.on("exit", function(code, err){
+                    console.log("exit: ", code, err);
+                }); 
+                blah.stdout.on("data", function(data){
+                    console.log("stdout: ", data.toString());
+                });
+                blah.stderr.on("data", function(data){
+                    console.log("stderr: ", data.toString());
+                });
+                setTimeout(function(){
+                        console.error("*******************************************timeout3");
+                        blah.kill();
+                    }, 800)
+            }, 800);   
+
+        }, 800);   
   });    
 });

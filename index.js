@@ -99,7 +99,7 @@ function SSHBase(){
               self._tasks = oldTasks;
             });  
         });
-      }, 25000);
+      }, 15000);
       //console.error('setTIMEOUT: ', this._timeout);
       // if the command starts with '_' that means it's a javascript function 
       // to call, otherwise it's a c++ function on _session: 
@@ -439,26 +439,6 @@ var SFTP = SSH.sftp = function () {
       throw new Error('Invalid argument.');
     this._addCommand("rmdir", [path], cb);
   };
-  
-  /**
-   * Executes a shell command on the server. The callback has two arguments,
-   * the error if the command could not be executed, and the output of the 
-   * command.
-   * 
-   * @param {String}       command
-   * @param {Function}     cb
-   * @type  {void}
-   */  
-  this.exec = function(command, cb) {
-    if (typeof command !== "string")
-      throw new Error('Invalid argument.');
-    if (this._options.cwd)
-        command = "cd " +this._options.cwd + "; " + command;
-    this._addCommand("exec", [command], function(error, data){
-      if (cb)
-        cb(error, data ? data.join("") : data);
-    });    
-  };
 
   this.spawn = function(command, args, options) {
     if (typeof command !== "string")
@@ -471,6 +451,9 @@ var SFTP = SSH.sftp = function () {
     if (args)
       command = command + " '" + args.join("' '") + "'";
     var child = new Child(this);
+    this._session.removeAllListeners("stderr");
+    this._session.removeAllListeners("stdout");
+    //console.error(command);
     this._session.on("stderr", function(data){
       child.stderr.emit("data", data);
     });
@@ -478,7 +461,7 @@ var SFTP = SSH.sftp = function () {
       child.stdout.emit("data", data);
     });
     this._addCommand("spawn", [command], function(exit, error){
-        console.log("FFS!!!!!!!!!!!!!!!");
+        //console.log("FFS!!!!!!!!!!!!!!!");
         child.emit("exit", exit, error);
     });
     return child;

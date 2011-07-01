@@ -61,10 +61,12 @@ void Tunnel::freeSessions()
 
 int Tunnel::startConnect(eio_req *req)
 {
+  // ssh connection:    
   Tunnel* pthis = (Tunnel*) req->data;
   if (SSHBase::startConnect(req)<0) {
     return 0;
   }
+  // create channel for the tunneling
   pthis->m_ssh_channel = ssh_channel_new(pthis->m_ssh_session);
   int res = channel_open_forward(pthis->m_ssh_channel,
                             pthis->m_remote_host, pthis->m_remote_port,
@@ -78,11 +80,11 @@ int Tunnel::startConnect(eio_req *req)
   return 0;
 }
 
+// sending data
 int Tunnel::startWrite(eio_req *req)
-{
+{     
   Tunnel* pthis = (Tunnel*) req->data;
   int res = ssh_channel_write(pthis->m_ssh_channel,pthis->m_wdata,pthis->m_size);
-  //fprintf(stderr, "written: %d\n", res);
   if (res < pthis->m_size) {
     snprintf(pthis->m_error, SSH_MAX_ERROR, 
         "Error writing channel: %s\n",
@@ -91,11 +93,14 @@ int Tunnel::startWrite(eio_req *req)
   return 0;
 }
 
+// pollling the channel and reading the incoming data
 int Tunnel::startRead(eio_req *req)
 {
   Tunnel* pthis = (Tunnel*) req->data;
+  // poll the channel
   int available = ssh_channel_poll(pthis->m_ssh_channel, 0);
   if (available) {
+    // if something is available for read, reading it  
     int res = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_rdata,SSH_MIN(available, SSH_READ_BUFFER_SIZE),0);
     if (res<0) {
@@ -112,11 +117,13 @@ int Tunnel::startRead(eio_req *req)
 }
 
 int Tunnel::onRead(eio_req *req)
-{
+{    
   Tunnel* pthis = (Tunnel*) req->data;
   HandleScope scope;
   Handle<Value> argv[2];
   argv[0] = String::New(pthis->m_error);
+  // read attempt is done, let's emitt an event, with the error and data
+  // (if there were any)
   if (pthis->m_size)
     argv[1] = createBuffer(pthis->m_rdata, pthis->m_size);
   pthis->Emit(callback_symbol, pthis->m_size ? 2 : 1, argv);
@@ -129,12 +136,15 @@ void Tunnel::Initialize(Handle<Object>& target)
     HandleScope scope;
     static int inited = 0;
     if (!inited) {
+      // init of the constructor function    
       Local<FunctionTemplate> t = FunctionTemplate::New(New);
       constructor_template = Persistent<FunctionTemplate>::New(t);
+      // inherit it from EventEmitter
       constructor_template->Inherit(EventEmitter::constructor_template);
       constructor_template->InstanceTemplate()->SetInternalFieldCount(1);
+      // setting class name
       constructor_template->SetClassName(String::NewSymbol("Tunnel"));
-      
+      // setting methods on the prototype (exporting c++ functions)
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "init", init);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "connect", connect);
       NODE_SET_PROTOTYPE_METHOD(constructor_template, "setPubKey", SSHBase::setPubKey);
@@ -146,14 +156,17 @@ void Tunnel::Initialize(Handle<Object>& target)
       inited = true;
     }
     
+    // add the Tunnel constructor function as a property to the exported object
+    // (see init.cc)
     target->Set(
         String::NewSymbol("Tunnel"),
         constructor_template->GetFunction()
     );
 }
 
+// fetching all the data that is needed for the ssh port forwarding session
 Handle<Value> Tunnel::init(const Arguments &args) 
-{  
+{     
   HandleScope scope;
   Tunnel *pthis = ObjectWrap::Unwrap<Tunnel>(args.This());
   pthis->freeSessions();
@@ -182,10 +195,6 @@ Handle<Value> Tunnel::connect(const Arguments &args)
   HandleScope scope;
   Tunnel *pthis = ObjectWrap::Unwrap<Tunnel>(args.This());
   pthis->resetData();
-  // TODO: key validation
-  //String::Utf8Value password(args[0]->ToString());
-  //String::Utf8Value pub_key(args[1]->ToString());
-  
   eio_custom(startConnect, EIO_PRI_DEFAULT, onDone, pthis);
   ev_ref(EV_DEFAULT_UC);
     

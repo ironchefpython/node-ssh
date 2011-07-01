@@ -37,15 +37,17 @@ private:
     sftp_session m_sftp_session;
     sftp_file m_sftp_file;
     ssh_channel m_ssh_channel;
+    ev_timer* m_timer;
     ListNode* m_list;
     sftp_attributes m_stat;
-    char* m_path;
-    char* m_path2;
+    char* m_buf;
+    char* m_buf2;
     size_t m_size;
     size_t m_size2;
     size_t m_pos;     
     int m_int;
     int m_int2;
+    int m_killed;
   
     static Persistent<FunctionTemplate> constructor_template;
     static Persistent<ObjectTemplate> data_template;    
@@ -60,7 +62,7 @@ private:
     static int cbReadFile(eio_req *req);
     static int startSpawn(eio_req *req);
     static int continueSpawn(eio_req *req);
-    static int cbSpawn(eio_req *req);
+    static int cbSpawn(eio_req *req);    
     static int startListDir(eio_req *req);
     static int startRename(eio_req *req);
     static int startChmod(eio_req *req);
@@ -68,10 +70,11 @@ private:
     static int startStat(eio_req *req);
     static int startUnlink(eio_req *req);
     static int startRmdir(eio_req *req);
-    static int startExec(eio_req *req);
     static int onStat(eio_req *req);
     static int onList(eio_req *req);
     static int onExit(eio_req *req);
+    
+    static void timerSpawn (ev_timer *w, int revents);
 
     virtual void freeSessions();
     virtual void resetData();
@@ -96,7 +99,6 @@ public:
     static Handle<Value> stat(const Arguments &args);
     static Handle<Value> unlink(const Arguments &args);
     static Handle<Value> rmdir(const Arguments &args);
-    static Handle<Value> exec(const Arguments &args);
     static Handle<Value> spawn(const Arguments &args);
     static Handle<Value> isConnected(const Arguments &args);
     static Handle<Value> kill(const Arguments &args);
