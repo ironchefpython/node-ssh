@@ -26,37 +26,44 @@ var SSH = module.exports = {};
 function SSHBase(){
   this.setupEvent = function() {
     var _self = this;
+    // Every async task that is running in the wrapped c++ component
+    // emitts a callback event. When the last task is done, we want to
+    // start the next one.
     this._session.on('callback',function(error,result,more){
-      //console.error("CALLBACK", _self._tasks[0].cmd);
+      // clear the timeout for the task (see _executeNext)
       if (_self._timeout) {
-        //console.error('clearTIMEOUT: ', _self._timeout);  
         clearTimeout(_self._timeout);
         _self._timeout = 0;
       }
-      var cb = _self._tasks[0].cb;      
+      var cb = _self._tasks[0].cb;
+      // _self._cb is used to prevent _addCommand to trigger an extra _executeNext
       _self._cb = true;
-      if (cb && typeof cb == "function"){
-        cb(error,result,more);  
-      }  
+      // remove the exetuted task
       _self._tasks.shift();
+      if (cb && typeof cb == "function"){
+        // executing the callback of the finished task
+        cb(error,result,more);  
+      }
       _self._cb = false;
+      // start next task
       _self._executeNext();
     });    
   };
   
+  // queue a new task
   this._addCommand = function(cmd, args, cb) {
     var task = {
         cmd:cmd, 
         args:args, 
         cb:cb
-      };
-    //console.error("add: ", cmd, this._tasks.length);      
+      };    
       this._tasks.push(task);
-      //console.error(this._tasks.length);
+      // if there was no running task, execute it asap:
       if (this._tasks.length == 1 && !this._cb)
         this._executeNext();
   };
   
+  // executes next task on the queue
   this._executeNext = function() {
     var self = this;
     if (this._tasks.length>0) {
@@ -65,8 +72,7 @@ function SSHBase(){
         clearTimeout(this._timeout);
       }
       // setting a timeout, if it times out, we have to interrupt the blocking
-      // operation, then trying to reconnect, if that fails too, we report the
-      // error
+      // operation, then we report the error
       if (this._tasks[0].cmd != 'spawn')
       this._timeout = setTimeout(function(){
         clearTimeout(this._timeout);
@@ -74,31 +80,10 @@ function SSHBase(){
         console.error("error: sftp timeout");
         self._session.removeAllListeners("callback");
         self._session.interrupt();
-        if (self._reconnect) {
-          self._reconnect = false;
-          return self._lastCb("Error: SSH: Connection lost, reconnect timed out.");
-        }
-        self._recreate();
-        var oldTasks = self._tasks;
         self._lastCb = self._tasks[0].cb;
-        self._tasks = [];
-        self.setupEvent();
-        self._reconnect = true;
-        self.init(self._options, function(err){
-            console.error("ssh reinit");
-            if (err)
-              return self._lastCb(
-                "Error: SFTP: Connection lost reconnect init error: " + err);
-            
-            self.connect(function(err){
-              console.error("reconnect");
-              return self._lastCb(
+        if (self._tasks[0].cb)
+            return self._tasks[0].cb(
                 "Error: SSH: Connection lost reconnect error: " + err);
-                
-              self._reconnect = false;
-              self._tasks = oldTasks;
-            });  
-        });
       }, 15000);
       //console.error('setTIMEOUT: ', this._timeout);
       // if the command starts with '_' that means it's a javascript function 
@@ -113,7 +98,7 @@ function SSHBase(){
     {
       // no commands left, let's send out a command after a while for
       // stay alive
-      this._timeout = setInterval(function(){
+      this._timeout = setTimeout(function(){
         self.stat("");},100000);
     }
   };  
@@ -524,10 +509,10 @@ sys.inherits(Tunnel, events.EventEmitter);
             //console.log(data.toString());                        
           }  
           self.emit("data", err, data);
-          setTimeout(cb, data ? 10 : 500);
+          setTimeout(cb, data ? 100 : 500);
         });
       };
-      setTimeout(cb,500);
+      setTimeout(cb,100);
   };
   
   this.connect = function(cb) {
