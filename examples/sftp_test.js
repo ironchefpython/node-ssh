@@ -6,7 +6,7 @@ var child_process = require('child_process');
 
 var data = [];
 for (var i = 0; i < 4000; i++)
-data.push("some long data", i);
+data.push("some long data", i, "\r\n");
 var longString = data.join("");
 
 var prvkey = "-----BEGIN RSA PRIVATE KEY-----\n\
@@ -44,6 +44,15 @@ var options = {
     pubKey: pubkey,
     prvKey: prvkey
 }
+
+var httpRespond = "HTTP/1.1 200 OK\r\n\
+content-type: text/html; charset=UTF-8\r\n\
+Connection: keep-alive\r\n\
+Transfer-Encoding: chunked\r\n\
+\r\n\
+20\r\n\
+<html><body>muhaha</body></html>\r\n0\r\n\r\n"
+
 
 var exp = module.exports = {
     deps: [],
@@ -192,35 +201,182 @@ var exp = module.exports = {
     "test spawn": function (next) {
       var self = this; 
       var script = 
-      "var fs = require('fs');\
-      for(var v=0; v<4000; v++){\
-         fs.writeSync(1, 'some long data'+v);\
-         fs.fsyncSync(1);\
-         fs.writeSync(2, 'some long data'+v);\
-         fs.fsyncSync(2);\
-       }";
+      "for(var v=0; v<4000; v++){\
+         console.log('some long data'+ v);\
+      }";
       this.sftp.writeFile(basePath + "/runme.js", script, function (err) {
         self.sftp.chmod(basePath + "/runme.js", 777, function (err) {
             var child = self.sftp.spawn("node", [basePath + "/runme.js"]);
-            var stdout = [],stderr = [];
+            var o = [],e = [];
             child.stdout.on("data", function(data) {
-                stdout.push(data.toString());
-                console.error("out[",data.toString(),"]");
+                o.push(data.toString());
             });
             child.stderr.on("data", function(data) {
-                stderr.push(data.toString());
-                console.error("err[",data.toString(),"]");
+                e.push(data.toString());
             });
             child.on("exit", function(code,error){
+                fs.writeFileSync("./blah.txt", o.join(""));    
                 assert.equal(error, "");
-                assert.equal(code, 0);
-                //assert.equal(stdout.join(""), longString, "stdout failed");
-                assert.equal(stderr.join(""), longString, "stderr failed");
+                assert.equal(code, 0, "error code is wrong");
+                assert.equal(o.join(""), longString, "stdout failed");
                 next();
             });
         });
       });    
     },
+    
+    "test spawn": function (next) {
+      var self = this; 
+      var script = 
+      "for(var v=0; v<4000; v++){\
+         console.log('some long data'+ v);\
+      }";
+      this.sftp.writeFile(basePath + "/runme.js", script, function (err) {
+        self.sftp.chmod(basePath + "/runme.js", 0777, function (err) {
+            var child = self.sftp.spawn("node", [basePath + "/runme.js"]);
+            var o = [],e = [];
+            child.stdout.on("data", function(data) {
+                o.push(data.toString());
+            });
+            child.stderr.on("data", function(data) {
+                e.push(data.toString());
+            });
+            child.on("exit", function(code,error){  
+                assert.equal(error, "");
+                assert.equal(code, 0, "error code is wrong");
+                assert.equal(o.join(""), longString, "stdout failed");
+                next();
+            });
+        });
+      });    
+    },    
+    
+    // writes a js file to the server with sftp, then executes it on the server,
+    // (spawn) the scripts opens a http server, then with tunnel, the server
+    // conencts to that http server as a client, and does a http get on it    
+    "test tunnel": function (next) {
+      var self = this; 
+      var script = 
+        "var http = require('http');\
+        http.createServer(function(request, response) {\
+            if (request.url === '/favicon.ico') {\
+                response.writeHead(404);\
+        		response.end();\
+        		return;\
+        	}\
+        	console.log('attached');\
+            response.writeHead(200, {\
+            	'content-type': 'text/html; charset=UTF-8'\
+        	});\
+        	response.end('<html><body>muhaha</body></html>');\
+        }).listen(11000);\
+        process.on('uncaughtException', function(err) {\
+        	console.error(err.stack);\
+        });";
+      var tunnel = new ssh.tunnel(); 
+      var options2 = {
+        host: "stage.io",
+        port: 22,
+        user: "sshtest",
+        pubKey: pubkey,
+        prvKey: prvkey,
+        remoteHost: "localhost",
+        remotePort: 11000,        
+      }
+      this.sftp.writeFile(basePath + "/runme.js", script, function (err) {
+        self.sftp.chmod(basePath + "/runme.js", 0777, function (err) {
+            var child = self.sftp.spawn("node", [basePath + "/runme.js"]);
+            var o = [],e = [];
+            child.stdout.on("data", function(data) {
+                assert.equal(data.toString(), "attached\r\n");
+                o.push(data.toString());
+            });
+            child.stderr.on("data", function(data) {
+                e.push(data.toString());
+            });
+            child.on("exit", function(code,error){
+                //next();
+            });
+            tunnel.init(options2, function(err){
+                assert.equal(err, "");
+                tunnel.on("data", function(err, data){
+                    assert.equal(err, "")
+                    assert.equal(data.toString(), httpRespond);
+                    child.kill();
+                    next();
+                })
+                tunnel.connect(function(err){
+                    assert.equal(err, "");
+                    tunnel.write("GET / HTTP/1.1\nHost: localhost:11000\n\n",function(err){
+                       assert.equal(err,""); 
+                    });
+                })
+            });
+        });
+      });    
+    },    
+    
+    // same test as above except we kill the remote process before we try to
+    // connect to it
+    "test kill": function (next) {
+      var self = this; 
+      var script = 
+        "var http = require('http');\
+        console.error('start');\
+        http.createServer(function(request, response) {\
+            if (request.url === '/favicon.ico') {\
+                response.writeHead(404);\
+            	response.end();\
+        		return;\
+        	}\
+            response.writeHead(200, {\
+            	'content-type': 'text/html; charset=UTF-8'\
+        	});\
+        	response.end('<html><body>muhaha</body></html>');\
+        }).listen(11001);\
+        process.on('uncaughtException', function(err) {\
+        	console.error(err.stack);\
+        });";
+      var tunnel = new ssh.tunnel(); 
+      var options2 = {
+        host: "stage.io",
+        port: 22,
+        user: "sshtest",
+        pubKey: pubkey,
+        prvKey: prvkey,
+        remoteHost: "localhost",
+        remotePort: 11001,        
+      }
+      this.sftp.writeFile(basePath + "/runme3.js", script, function (err) {
+        assert.equal(err, "");  
+        self.sftp.chmod(basePath + "/runme3.js", 0777, function (err) {
+            assert.equal(err, "");
+            var child = self.sftp.spawn("node", [basePath + "/runme3.js"]);
+            var o = [],e = [];
+            child.stdout.on("data", function(data) {
+                assert.equal(data.toString(), "start\r\n");
+                child.kill();
+                tunnel.init(options2, function(err){
+                    assert.equal(err, "");
+                    // since we killed the http server (remote) process this should fail
+                    tunnel.connect(function(err){
+                        assert.equal(err, "Error opening a channel for port forwarding: Channel opening failure: channel 43 error (1) open failed\n");
+                        next();
+                    })
+                });                
+            });
+            child.stderr.on("data", function(data) {
+                console.error('err', data.toString());
+                e.push(data.toString());
+            });
+            child.on("exit", function(code,error){
+                // the child process has been killed:
+                assert.equal(code, -1);
+                assert.equal(error,"");
+            });            
+        });
+      });    
+    },    
 };
 
 exp.sftp = new ssh.sftp();

@@ -81,9 +81,10 @@ function SSHBase(){
         self._session.removeAllListeners("callback");
         self._session.interrupt();
         self._lastCb = self._tasks[0].cb;
+        console.error(self._tasks[0].cmd);
         if (self._tasks[0].cb)
             return self._tasks[0].cb(
-                "Error: SSH: Connection lost reconnect error: " + err);
+                "Error: SSH: Connection timed out");
       }, 15000);
       //console.error('setTIMEOUT: ', this._timeout);
       // if the command starts with '_' that means it's a javascript function 
@@ -490,11 +491,6 @@ sys.inherits(Tunnel, events.EventEmitter);
   this.read = function(cb) {    
     var self = this;
     this._addCommand("read", [], cb);
-    //function(error, data) {
-    //  if (error || data) {
-    //      self.emmit("data", error, data);
-    //  }  
-    //});
   };
   
   this.startReading = function() {
@@ -502,13 +498,9 @@ sys.inherits(Tunnel, events.EventEmitter);
       var cb = function(){
         //console.log(".");
         self.read(function(err, data) {
-          if (err) {
-            console.log(err);            
-          }  
-          if (data) {
-            //console.log(data.toString());                        
-          }  
-          self.emit("data", err, data);
+          if (data || err) {
+             self.emit("data", err, data);                      
+          }            
           setTimeout(cb, data ? 100 : 500);
         });
       };

@@ -182,8 +182,11 @@ Handle<Value> Tunnel::init(const Arguments &args)
   setMember(pthis->m_remote_host, opt, "remoteHost");  
   setMember(pthis->m_remote_port, opt, "remotePort");  
   setMember(pthis->m_src_host, opt, "srcHost");
+  if (!pthis->m_src_host)
+    pthis->m_src_host = "localhost";
   setMember(pthis->m_local_port, opt, "localPort");  
-
+  if (!pthis->m_local_port)
+    pthis->m_local_port = 5555;
   long timeout = 10;
   ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_TIMEOUT, (void*) &timeout);
   //ssh_options_set(pthis->m_ssh_session, SSH_OPTIONS_LOG_VERBOSITY, (void*) new int(SSH_LOG_PACKET));

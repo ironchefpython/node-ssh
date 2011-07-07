@@ -11,7 +11,7 @@
 
 #define SFTP_MIN(a,b) ((a) < (b) ? (a) : (b))
 #define SFTP_MAX_ERROR 4096
-#define SFTP_BUFFER_SIZE 1024
+#define SFTP_BUFFER_SIZE 4096
 
 Persistent<FunctionTemplate> SFTP::constructor_template;
 Persistent<ObjectTemplate> SFTP::data_template;
@@ -270,7 +270,7 @@ int SFTP::continueReadFile(eio_req *req)
 {
   SFTP* pthis = (SFTP*) req->data;
   int res, nwritten, nbytes;
-  char buffer[SFTP_BUFFER_SIZE*10];
+  char buffer[SFTP_BUFFER_SIZE];
 
   // read next chunk
   nbytes = sftp_read(pthis->m_sftp_file, buffer, sizeof(buffer));
@@ -492,47 +492,54 @@ int SFTP::continueSpawn(eio_req *req)
     return 0;
   }
   
+  int eof = 0;
   // poll and read if available stdout
   available = ssh_channel_poll(pthis->m_ssh_channel, 0);
-  if (available == SSH_EOF)
+  if (available == SSH_EOF) {
+    // end of file -> we still need to read the data that is available...
+    eof = 1;
     available = SFTP_BUFFER_SIZE;
-  if (available) {
+  }    
+  if (available < 0) 
+    // something went wrong... error report below
+    pthis->m_done = 1;
+  else if (available > 0) {
     // read what we can  
     pthis->m_size = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_buf,SSH_MIN(available, SFTP_BUFFER_SIZE),0);
-    if (pthis->m_size<=0)
-      pthis->m_done = 1;
 	if (pthis->m_size < 0) {
-		pthis->m_size = 0;
-	}  
+		// if error, then end
+        pthis->m_size = 0;
+        pthis->m_done = 1;
+	} 
   }
-  else if (available < 0) {
-    pthis->m_done = 1;
-  }  
   
-  // poll and read if available stderr
+  // poll and read if available stderr, same logic as above
   available2 = ssh_channel_poll(pthis->m_ssh_channel, 1);
-  if (available2 == SSH_EOF)
+  if (available2 == SSH_EOF) 
     available2 = SFTP_BUFFER_SIZE;
-  if (available2) {
-    // read what we can
+  if (available2 < 0)
+    pthis->m_done = 1;
+  if (available2 > 0) {
     pthis->m_size2 = ssh_channel_read(pthis->m_ssh_channel,
       pthis->m_buf2,SSH_MIN(available2, SFTP_BUFFER_SIZE),1);
-	  if (pthis->m_size2<=0)
-		  pthis->m_done = 1;
-	  if (pthis->m_size2 < 0) {
-		  pthis->m_size2 = 0;
-	  }  
-  }
-  else if (available2 < 0) {
-    pthis->m_done = 1;
+    if (pthis->m_size2 < 0) {
+      pthis->m_size2 = 0;
+      pthis->m_done = 1;          
+    }  
   }
   
   if (pthis->m_size < 0 || pthis->m_size2 < 0) {
+    // something went wront, let's report the error
     snprintf(pthis->m_error, SFTP_MAX_ERROR, "SSH exec read error.%s\n", 
       ssh_get_error(pthis->m_ssh_session));
     pthis->m_done = 1;
     return 0;
+  }
+  
+  if (eof && !pthis->m_size && !pthis->m_size2) {
+    // end of file, nothing else to read on either channel, we are done and happy
+    pthis->m_done = 1;
   }
   
   return 0;
@@ -543,13 +550,13 @@ int SFTP::cbSpawn(eio_req *req)
   SFTP* pthis = (SFTP*) req->data;
   HandleScope scope;    
   if (pthis->m_size) {
-    // read something from stdout, let's emit an 'stdout' event  
+    // read something from stdout, let's emitt an 'stdout' event  
     Handle<Value> argv[1];
     argv[0] = createBuffer(pthis->m_buf, pthis->m_size);  
     pthis->Emit(stdout_symbol, 1, argv);
   }
   if (pthis->m_size2) {
-    // read something from stderr, let's emit an 'stderr' event  
+    // read something from stderr, let's emitt an 'stderr' event  
     Handle<Value> argv[1];
     argv[0] = createBuffer(pthis->m_buf2, pthis->m_size2);  
     pthis->Emit(stderr_symbol, 1, argv);
