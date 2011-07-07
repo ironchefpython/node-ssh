@@ -1,3 +1,3 @@
 [submodule "support/libssh"]
 	path = support/libssh
-	url = git@github.com:ajaxorg/libssh.git
+	url = git://github.com/ajaxorg/libssh.git
